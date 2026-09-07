@@ -1,0 +1,237 @@
+// FoodRescue AI — Prisma Schema
+// SQLite for local prototype, compatible with PostgreSQL for production
+// To switch to PostgreSQL: change provider to "postgresql" and update DATABASE_URL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── User & Roles ────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  role      String   // "donor" | "receiver" | "volunteer"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  donations  Donation[]
+  receiver   Receiver?
+  volunteer  Volunteer?
+}
+
+// ─── Donor / Donation ────────────────────────────────────────────────────────
+
+model Donation {
+  id          String   @id @default(cuid())
+  donorId     String
+  donor       User     @relation(fields: [donorId], references: [id])
+
+  // Food details
+  foodName        String
+  category        String   // "cooked_meal" | "raw_produce" | "packaged" | "bakery" | "dairy" | "beverages" | "other"
+  quantity        Int      // number of servings/units
+  weightKg        Float
+  description     String?
+  allergens       String   // JSON array stored as string
+  handlingNotes   String?
+
+  // Time fields
+  preparedAt      DateTime
+  packagingTime   DateTime // when it was packed/ready
+  usableDuration  Int      // minutes
+  expiryTime      DateTime
+
+  // Condition
+  storageCondition  String  // "room_temp" | "refrigerated" | "frozen" | "hot_hold"
+  temperature       Float?
+  temperatureTime   DateTime? // when temperature was measured
+  packagingCondition String  // "intact" | "minor_damage" | "damaged"
+
+  // Location
+  pickupLat   Float
+  pickupLng   Float
+  pickupAddress String
+
+  // Photo
+  photoUrl    String?
+
+  // Screening (AI or manual)
+  screeningResult   String  @default("UNAVAILABLE") // "CLEAR" | "CONCERN" | "UNCERTAIN" | "UNAVAILABLE"
+  screeningNotes    String?
+  screeningAt       DateTime?
+  manualReviewedAt  DateTime?
+  manualReviewedBy  String?
+
+  // Suitability score
+  suitabilityScore  Float   @default(0)
+  scoreBreakdown    String? // JSON
+
+  // Status / state machine
+  // "posted" | "screening" | "needs_review" | "eligible" | "matched" | "picked_up"
+  // | "in_transit" | "delivered" | "blocked" | "on_hold" | "rejected"
+  status      String  @default("posted")
+
+  // Allocation
+  totalAllocated  Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  allocations DonationAllocation[]
+  deliveries  Delivery[]
+}
+
+// ─── Receiver ────────────────────────────────────────────────────────────────
+
+model Receiver {
+  id      String @id @default(cuid())
+  userId  String @unique
+  user    User   @relation(fields: [userId], references: [id])
+
+  orgName     String
+  orgType     String  // "ngo" | "shelter" | "community_kitchen" | "food_bank"
+  contactName String
+  contactPhone String?
+
+  // Capacity & demand
+  currentDemand     Int     // meals needed right now
+  maxCapacity       Int     // absolute maximum
+  acceptedCategories String // JSON array
+
+  // Storage
+  availableStorage  String  // JSON array of storage conditions
+
+  // Location
+  lat         Float
+  lng         Float
+  address     String
+
+  // Preferences
+  urgency          String  @default("medium") // "low" | "medium" | "high" | "critical"
+  canArrangePickup Boolean @default(false)
+
+  // Status
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  allocations DonationAllocation[]
+}
+
+// ─── Volunteer ───────────────────────────────────────────────────────────────
+
+model Volunteer {
+  id      String @id @default(cuid())
+  userId  String @unique
+  user    User   @relation(fields: [userId], references: [id])
+
+  vehicleType     String  // "bicycle" | "motorcycle" | "car" | "van" | "truck"
+  maxMealCapacity Int
+  storageTypes    String  // JSON array of supported storage conditions
+
+  // Availability
+  isAvailable Boolean @default(true)
+  availableFrom DateTime?
+  availableTo   DateTime?
+
+  // Current location (updated at task acceptance)
+  currentLat  Float?
+  currentLng  Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveries Delivery[]
+}
+
+// ─── Delivery ────────────────────────────────────────────────────────────────
+
+model Delivery {
+  id          String  @id @default(cuid())
+  donationId  String
+  donation    Donation @relation(fields: [donationId], references: [id])
+
+  volunteerId String?
+  volunteer   Volunteer? @relation(fields: [volunteerId], references: [id])
+
+  // State machine
+  // "pending" | "accepted" | "picked_up" | "in_transit" | "delivered" | "on_hold" | "cancelled"
+  status String @default("pending")
+
+  // Pickup confirmation
+  pickedUpAt          DateTime?
+  pickupTemperature   Float?
+  pickupPackagingOk   Boolean?
+  pickupNotes         String?
+
+  // Delivery confirmation
+  deliveredAt         DateTime?
+  deliveryTemperature Float?
+  receiverAccepted    Boolean?
+  recipientName       String?
+  deliveryNotes       String?
+
+  // Incident
+  incidentAt    DateTime?
+  incidentType  String?   // "spoilage" | "accident" | "temperature_breach" | "packaging_damage" | "other"
+  incidentNotes String?
+  onHoldAt      DateTime?
+
+  // Timing
+  estimatedPickupAt    DateTime?
+  estimatedDeliveryAt  DateTime?
+  actualDeliveryMinutes Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  allocations DonationAllocation[]
+}
+
+// ─── Allocation (many-to-many Donation ↔ Receiver with quantity) ─────────────
+
+model DonationAllocation {
+  id          String   @id @default(cuid())
+  donationId  String
+  donation    Donation @relation(fields: [donationId], references: [id])
+
+  receiverId  String
+  receiver    Receiver @relation(fields: [receiverId], references: [id])
+
+  deliveryId  String?
+  delivery    Delivery? @relation(fields: [deliveryId], references: [id])
+
+  quantityAllocated Int
+  weightAllocated   Float
+
+  status String @default("pending") // "pending" | "confirmed" | "delivered" | "cancelled"
+
+  confirmedAt   DateTime?
+  confirmedBy   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Analytics Events ─────────────────────────────────────────────────────────
+
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  eventType String   // "delivery_confirmed" | "food_blocked" | "food_rescued" | etc.
+  donationId String?
+  deliveryId String?
+  weightKg   Float?
+  meals      Int?
+  category   String?
+  metadata   String? // JSON
+  occurredAt DateTime @default(now())
+}
